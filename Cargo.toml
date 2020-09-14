@@ -13,7 +13,7 @@ smallvec = "1.4.2"
 rayon = "1.3.1"
 criterion = "0.3"
 criterion_bencher_compat = "0.3"
-rayoff = { path = "../rayoff" }
+rayoff = { git = "https://github.com/aeyakovenko/rayoff" }
 
 [lib]
 crate-type = ["lib"]

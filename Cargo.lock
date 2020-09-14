@@ -399,6 +399,7 @@ dependencies = [
 [[package]]
 name = "rayoff"
 version = "0.1.0"
+source = "git+https://github.com/aeyakovenko/rayoff#a01d3f33ad7b24c5f38897cca1e5de9c980207f0"
 dependencies = [
  "sys-info",
 ]
