@@ -1,0 +1,27 @@
+[package]
+name = "threadpooler"
+version = "0.1.0"
+authors = ["Jack Thomsoon"]
+
+[dependencies]
+sys-info = "0.5.8" 
+crossbeam-channel = "0.4"
+parking_lot = "0.11.0"
+smallvec = "1.4.2"
+
+[dev-dependencies]
+rayon = "1.3.1"
+criterion = "0.3"
+criterion_bencher_compat = "0.3"
+rayoff = { path = "../rayoff" }
+
+[lib]
+crate-type = ["lib"]
+name = "threadpooler"
+
+[profile.release]
+debug = true
+
+[[bench]]                                           
+name = "rayoff"
+harness = false
