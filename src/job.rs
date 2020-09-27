@@ -75,25 +75,21 @@ impl Job {
     #[inline]
     pub fn execute(&self, num_threads: usize) {
         // let chunk_size = (self.num / num_threads) / 2;
-        let mut greedy_searcher = 1;
+        let mut completed = 0;
 
         loop {
             let index = self
                 .work_index
-                .fetch_add(greedy_searcher, Ordering::Relaxed);
+                .fetch_add(1, Ordering::Relaxed);
             if index >= self.num {
                 break;
             }
 
-            let top_end = cmp::min(greedy_searcher + index, self.num);
-            for inner in index..top_end {
-                (self.func)(self.ctx, self.elems, inner as u64);
-            }
-
-            self.done_index
-                .fetch_add(greedy_searcher, Ordering::Relaxed);
-            greedy_searcher *= 2;
+            (self.func)(self.ctx, self.elems, index as u64);
+            completed += 1;
         }
+
+        self.done_index.fetch_add(completed, Ordering::Relaxed);
     }
 
     #[inline]
@@ -104,11 +100,7 @@ impl Job {
             if guard >= self.num as usize {
                 break;
             }
-            if backoff.is_completed() {
-                thread::park();
-            } else {
-                backoff.snooze();
-            }
+            backoff.snooze();
         }
     }
 }
