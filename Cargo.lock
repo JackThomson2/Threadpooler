@@ -585,10 +585,10 @@ dependencies = [
  "criterion",
  "criterion_bencher_compat",
  "crossbeam-channel",
+ "crossbeam-utils",
  "parking_lot",
  "rayoff",
  "rayon",
- "smallvec",
  "sys-info",
 ]
 

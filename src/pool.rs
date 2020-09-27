@@ -1,11 +1,9 @@
 extern crate crossbeam_channel;
 extern crate parking_lot;
-extern crate smallvec;
 extern crate sys_info;
 
 use self::crossbeam_channel::{unbounded, Receiver, SendError, Sender};
-use self::parking_lot::Mutex;
-use self::smallvec::{smallvec, SmallVec};
+use self::parking_lot::RwLock;
 use job::Job;
 use std::sync::Arc;
 use std::thread::spawn;
@@ -14,25 +12,25 @@ type SendRef = Sender<Arc<Job>>;
 
 #[derive(Debug)]
 pub struct Pool {
-    senders: Mutex<SmallVec<[SendRef; 8]>>,
+    senders: RwLock<Vec<SendRef>>,
 }
 
 impl Default for Pool {
     fn default() -> Self {
         let num_threads = Pool::get_thread_count();
-        let mut senders: SmallVec<[SendRef; 8]> = smallvec![];
+        let mut senders: Vec<SendRef> = vec![];
         (0..num_threads).for_each(|_| {
             let (sender, recvr): (Sender<Arc<Job>>, Receiver<Arc<Job>>) = unbounded();
             let _ = spawn(move || {
                 for job in recvr.iter() {
-                    job.execute()
+                    job.execute(num_threads)
                 }
             });
             senders.push(sender);
         });
         let senders = senders;
         Self {
-            senders: Mutex::new(senders),
+            senders: RwLock::new(senders),
         }
     }
 }
@@ -75,7 +73,7 @@ impl Pool {
 
     #[inline]
     fn notify_all(&self, job: Arc<Job>) -> Result<(), SendError<Arc<Job>>> {
-        let senders = self.senders.lock();
+        let senders = self.senders.read();
         for s in senders.iter() {
             s.send(job.clone())?;
         }
@@ -142,7 +140,7 @@ mod tests {
             })
         };
         let job = Arc::new(job);
-        job.execute();
+        job.execute(1);
         pool.notify_all(job.clone());
         job.wait();
     }
@@ -159,7 +157,7 @@ mod tests {
             })
         };
         let job = Arc::new(job);
-        job.execute();
+        job.execute(1);
         job.wait();
         pool.notify_all(job.clone());
     }

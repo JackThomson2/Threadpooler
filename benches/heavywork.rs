@@ -11,14 +11,19 @@ use criterion_bencher_compat as bencher;
 
 use bencher::{benchmark_group, benchmark_main, Bencher};
 
-const TO_TEST: usize = 100;
+const TO_TEST: usize = 10000;
 
 fn bench_pool(bencher: &mut Bencher) {
     let pool = Pool::default();
     bencher.iter(|| {
         let mut array = [0usize; TO_TEST];
-        pool.dispatch_mut(&mut array, |val: &mut usize| *val += 1);
-        let expected = [1usize; TO_TEST];
+        pool.dispatch_mut(&mut array, |val: &mut usize| {
+            for i in 0..=10_000 {
+                *val = i
+            }
+        });
+
+        let expected = [10_000usize; TO_TEST];
         for i in 0..TO_TEST {
             assert_eq!(array[i], expected[i]);
         }
@@ -30,9 +35,13 @@ fn bench_pooler(bencher: &mut Bencher) {
     bencher.iter(|| {
         let mut array = [0usize; TO_TEST];
         let _ = pool
-            .dispatch_mut(&mut array, |val: &mut usize| *val += 1)
+            .dispatch_mut(&mut array, |val: &mut usize| {
+                for i in 0..=10_000 {
+                    *val = i
+                }
+            })
             .is_ok();
-        let expected = [1usize; TO_TEST];
+        let expected = [10_000usize; TO_TEST];
         for i in 0..TO_TEST {
             assert_eq!(array[i], expected[i]);
         }
@@ -42,10 +51,14 @@ fn bench_pooler(bencher: &mut Bencher) {
 fn bench_baseline(bencher: &mut Bencher) {
     bencher.iter(|| {
         let mut array = [0usize; TO_TEST];
-        for i in array.iter_mut() {
-            *i += 1;
+
+        for p in array.iter_mut() {
+            for i in 0..=10_000 {
+                *p = i
+            }
         }
-        let expected = [1usize; TO_TEST];
+
+        let expected = [10_000usize; TO_TEST];
         for i in 0..TO_TEST {
             assert_eq!(array[i], expected[i]);
         }
@@ -55,14 +68,18 @@ fn bench_baseline(bencher: &mut Bencher) {
 fn bench_rayon(bencher: &mut Bencher) {
     bencher.iter(|| {
         let mut array = [0usize; TO_TEST];
-        array.par_iter_mut().for_each(|p| *p += 1);
-        let expected = [1usize; TO_TEST];
+        array.par_iter_mut().for_each(|p| {
+            for i in 0..=10_000 {
+                *p = i
+            }
+        });
+        let expected = [10_000usize; TO_TEST];
         for i in 0..TO_TEST {
             assert_eq!(array[i], expected[i]);
         }
     })
 }
 
-benchmark_group!(benches, bench_pool, bench_pooler);
+benchmark_group!(benches, bench_pool, bench_pooler, bench_rayon);
 
 benchmark_main!(benches);

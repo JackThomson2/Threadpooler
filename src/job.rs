@@ -1,13 +1,22 @@
+extern crate crossbeam_utils;
+
 use std::os::raw::c_void;
-use std::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
+use std::{
+    cmp,
+    sync::atomic::{AtomicUsize, Ordering},
+    thread::{self, Thread},
+};
+
+use self::crossbeam_utils::Backoff;
 
 pub struct Job {
     func: Progress,
     ctx: *mut c_void,
     elems: *mut c_void,
-    num: u64,
+    num: usize,
     work_index: AtomicUsize,
     done_index: AtomicUsize,
+    greedy_count: AtomicUsize,
 }
 
 /// Safe because ctx/elems are only touched until job is complete.
@@ -36,11 +45,12 @@ impl Job {
         let (ctx, func) = Job::unpack_closure(&mut closure);
         Self {
             elems: elems.as_mut_ptr() as *mut c_void,
-            num: elems.len() as u64,
+            num: elems.len(),
             done_index: AtomicUsize::new(0),
             work_index: AtomicUsize::new(0),
             func,
             ctx,
+            greedy_count: AtomicUsize::new(1),
         }
     }
 
@@ -63,25 +73,42 @@ impl Job {
     }
 
     #[inline]
-    pub fn execute(&self) {
+    pub fn execute(&self, num_threads: usize) {
+        // let chunk_size = (self.num / num_threads) / 2;
+        let mut greedy_searcher = 1;
+
         loop {
-            let index = self.work_index.fetch_add(1, Ordering::Relaxed);
-            if index as u64 >= self.num {
+            let index = self
+                .work_index
+                .fetch_add(greedy_searcher, Ordering::Relaxed);
+            if index >= self.num {
                 break;
             }
-            (self.func)(self.ctx, self.elems, index as u64);
-            self.done_index.fetch_add(1, Ordering::Relaxed);
+
+            let top_end = cmp::min(greedy_searcher + index, self.num);
+            for inner in index..top_end {
+                (self.func)(self.ctx, self.elems, inner as u64);
+            }
+
+            self.done_index
+                .fetch_add(greedy_searcher, Ordering::Relaxed);
+            greedy_searcher *= 2;
         }
     }
 
     #[inline]
     pub fn wait(&self) {
+        let backoff = Backoff::new();
         loop {
             let guard = self.done_index.load(Ordering::Relaxed);
             if guard >= self.num as usize {
                 break;
             }
-            spin_loop_hint();
+            if backoff.is_completed() {
+                thread::park();
+            } else {
+                backoff.snooze();
+            }
         }
     }
 }
