@@ -1,22 +1,22 @@
-extern crate crossbeam_utils;
+use crate::lockedBatch::LockedBatch;
 
+use parking_lot::{Condvar, Mutex};
+use std::cmp;
 use std::os::raw::c_void;
-use std::{
-    cmp,
-    sync::atomic::{AtomicUsize, Ordering},
-    thread::{self, Thread},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
-use self::crossbeam_utils::Backoff;
+use smallvec::SmallVec;
 
 pub struct Job {
     func: Progress,
     ctx: *mut c_void,
     elems: *mut c_void,
     num: usize,
-    work_index: AtomicUsize,
     done_index: AtomicUsize,
-    greedy_count: AtomicUsize,
+    waker_lock: Arc<(Mutex<bool>, Condvar)>,
+
+    locked_batch: SmallVec<[LockedBatch; 64]>,
 }
 
 /// Safe because ctx/elems are only touched until job is complete.
@@ -34,7 +34,7 @@ impl Job {
     /// This function is unsafe because the Job object must
     /// be complete.  Users must call Job::wait befor returning.
     #[inline]
-    pub unsafe fn new<F, A>(elems: &mut [A], func: F) -> Self
+    pub unsafe fn new<F, A>(elems: &mut [A], func: F, cores: usize) -> Self
     where
         F: Fn(&mut A) + Send + Sync,
     {
@@ -42,15 +42,33 @@ impl Job {
             let elem: &mut A = std::mem::transmute((ptr as *mut A).add(index as usize));
             (func)(elem)
         };
+
+        let cores = cmp::max(cores, 1) * 8;
+
+        let estim_per_batch = elems.len() / cores;
+        let batch_overflow = elems.len() % cores;
+
+        let locked_batch = (0..cores)
+            .map(|i| {
+                let (num, offset) = if i == 0 {
+                    (estim_per_batch + batch_overflow, 0)
+                } else {
+                    (estim_per_batch, (i * estim_per_batch) + batch_overflow)
+                };
+
+                LockedBatch::new(num, offset)
+            })
+            .collect();
+
         let (ctx, func) = Job::unpack_closure(&mut closure);
         Self {
             elems: elems.as_mut_ptr() as *mut c_void,
             num: elems.len(),
             done_index: AtomicUsize::new(0),
-            work_index: AtomicUsize::new(0),
             func,
             ctx,
-            greedy_count: AtomicUsize::new(1),
+            locked_batch,
+            waker_lock: Arc::new((Mutex::new(false), Condvar::new())),
         }
     }
 
@@ -73,34 +91,75 @@ impl Job {
     }
 
     #[inline]
-    pub fn execute(&self, num_threads: usize) {
-        // let chunk_size = (self.num / num_threads) / 2;
+    fn get_free_slot(&self) -> Option<&LockedBatch> {
+        // First try to find a free slot
+        for slot in self.locked_batch.iter() {
+            if slot.is_free() {
+                if !slot.own() {
+                    continue;
+                }
+                return Some(slot);
+            }
+        }
+
+        let found = self
+            .locked_batch
+            .iter()
+            .filter(|slot| !slot.is_complete())
+            .max_by(|slot, slot2| slot.get_weight().cmp(&slot2.get_weight()));
+
+        if let Some(slot) = found {
+            slot.add_worker();
+            return Some(slot);
+        }
+        None
+    }
+
+    #[inline]
+    pub fn execute(&self) {
         let mut completed = 0;
 
         loop {
-            let index = self
-                .work_index
-                .fetch_add(1, Ordering::Relaxed);
-            if index >= self.num {
+            let free_slot = self.get_free_slot();
+            if free_slot.is_none() {
                 break;
             }
 
-            (self.func)(self.ctx, self.elems, index as u64);
-            completed += 1;
-        }
+            let locked_batch = free_slot.unwrap();
+            loop {
+                let index = locked_batch.get_next_index();
 
-        self.done_index.fetch_add(completed, Ordering::Relaxed);
+                if index >= locked_batch.count {
+                    if !locked_batch.is_sharing() {
+                        locked_batch.force_inc_counter(index);
+                    }
+                    break;
+                }
+
+                (self.func)(self.ctx, self.elems, (index + locked_batch.offset) as u64);
+                completed += 1;
+            }
+
+            // println!("Finished work with pool: {}", locked_batch.offset);
+        }
+        // println!("Thread is closing... we did {}", completed);
+        let done = self.done_index.fetch_add(completed, Ordering::Release);
+
+        if done + completed >= self.num {
+            let &(ref lock, ref cvar) = &*(self.waker_lock.clone());
+            let mut started = lock.lock();
+            *started = true;
+            cvar.notify_all();
+        }
     }
 
     #[inline]
     pub fn wait(&self) {
-        let backoff = Backoff::new();
-        loop {
-            let guard = self.done_index.load(Ordering::Relaxed);
-            if guard >= self.num as usize {
-                break;
-            }
-            backoff.snooze();
+        let &(ref lock, ref cvar) = &*(self.waker_lock.clone());
+
+        let mut started = lock.lock();
+        if !*started {
+            cvar.wait(&mut started);
         }
     }
 }

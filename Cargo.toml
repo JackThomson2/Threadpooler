@@ -1,17 +1,19 @@
 [package]
 name = "threadpooler"
 version = "0.1.0"
+edition = "2018"
 authors = ["Jack Thomsoon"]
 
 [dependencies]
-sys-info = "0.5.8" 
+num_cpus  = "1.13.0" 
 crossbeam-channel = "0.4"
+crossbeam-deque = "0.7.3"
 parking_lot = "0.11.0"
-crossbeam-utils = "0.7.2"
+criterion = "0.3"
+smallvec = "1.4.2"
 
 [dev-dependencies]
-rayon = "1.3.1"
-criterion = "0.3"
+rayon = "= 1.4.1"
 criterion_bencher_compat = "0.3"
 rayoff = { git = "https://github.com/aeyakovenko/rayoff" }
 
@@ -22,10 +24,14 @@ name = "threadpooler"
 [profile.release]
 debug = true
 
+[profile.bench]
+lto = 'fat'
+codegen-units = 1
+
 [[bench]]                                           
 name = "rayoff"
 harness = false
 
 [[bench]]                                           
-name = "heavywork"
+name = "atomic"
 harness = false
